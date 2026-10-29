@@ -37,13 +37,27 @@ def pick_queries(doc, k=12, words_per_query=12, skip_grams=frozenset(), n=6):
 
 
 def ddg_search(query, max_results=5):
-    """Search DuckDuckGo (no API key). Returns [{'href','title'}]."""
+    """Search DuckDuckGo (no API key). Tries the exact phrase first, then the same words without quotes.
+    Returns [{'href','title'}]; an empty list when nothing is found."""
     try:
         from ddgs import DDGS
     except ImportError:                       # older package name
         from duckduckgo_search import DDGS
-    with DDGS() as d:
-        return list(d.text(f'"{query}"', max_results=max_results))
+    last_error = None
+    for q in (f'"{query}"', query):
+        try:
+            with DDGS() as d:
+                res = list(d.text(q, max_results=max_results))
+            if res:
+                return res
+        except Exception as e:
+            if "no results" in str(e).lower():
+                continue                      # not an error, just nothing found
+            last_error = e
+            time.sleep(2)                     # possible rate limit; try the other form
+    if last_error is not None:
+        raise last_error
+    return []
 
 
 def fetch_text(url, timeout=8, max_bytes=1_500_000):
@@ -84,10 +98,11 @@ def check_web(doc, n=6, min_run=8, max_queries=12, max_pages=20, exclude_substri
                     urls.append(u)
                     titles[u] = res.get("title", u)
         except Exception as e:                 # rate limit / network
-            errors.append(f"Search failed: {str(e)[:120]}")
-            if len(errors) >= 3:
-                q_urls.append(found)
-                break
+            if "no results" not in str(e).lower():
+                errors.append(f"Search failed: {str(e)[:120]}")
+                if len(errors) >= 5:
+                    q_urls.append(found)
+                    break
         q_urls.append(found)
         time.sleep(delay)
     urls = urls[:max_pages]
