@@ -57,7 +57,7 @@ tab1, tab2 = st.tabs(["Module 1: Plagiarism check", "Module 2: Assignment simila
 with tab1:
     st.write("Upload one **.docx** or **.pdf**. Distinctive passages are searched on the web and the matching pages are compared word by word.")
     title1 = st.text_input("Report title", "Independent Similarity Check Report", key="t1")
-    up = st.file_uploader("Paper", type=["docx", "pdf"], key="single")
+    up = st.file_uploader("Paper", type=["docx", "pdf"], key="up_single")
     c1, c2 = st.columns(2)
     max_q = c1.slider("Passages to search", 5, 30, 12, help="More passages = better coverage but slower.")
     excl = c2.text_input("Ignore web addresses containing (comma separated)",
@@ -98,8 +98,8 @@ with tab2:
              "for example `Rahul Kumar - Assignment 1.pdf`. Names are read from the file names and can be corrected below. "
              "Submissions are compared with each other, and can also be checked for text copied from the web.")
     title2 = st.text_input("Report title", "Assignment Similarity Report", key="t2")
-    files = st.file_uploader("Submissions", type=["docx", "pdf"], accept_multiple_files=True, key="class")
-    tmpl = st.file_uploader("Optional: question paper or template to ignore", type=["docx", "pdf"], key="tmpl")
+    files = st.file_uploader("Submissions", type=["docx", "pdf"], accept_multiple_files=True, key="up_class")
+    tmpl = st.file_uploader("Optional: question paper or template to ignore", type=["docx", "pdf"], key="up_tmpl")
     w1, w2 = st.columns(2)
     do_web = w1.checkbox("Also check every submission against the web", True)
     web_q = w2.slider("Passages searched per submission", 3, 15, 6,
