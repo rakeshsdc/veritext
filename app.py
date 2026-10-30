@@ -7,13 +7,50 @@ from veritext.extract import extract_text, strip_references
 from veritext.names import student_name_from_filename, unique_names
 from veritext.report import build_class_report, build_single_report
 from veritext.similarity import analyse_class, combine_web, excluded_grams, internal_repetition, level_for, make_doc
-from veritext.websearch import check_web
+from veritext.websearch import check_web, make_search
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 st.set_page_config(page_title=APP_NAME, page_icon="📄", layout="wide")
 st.title(f"📄 {APP_NAME}")
 st.caption(APP_TAGLINE)
+
+st.markdown(
+    f"**{APP_NAME}** checks documents for copied text. Upload Word (.docx) or PDF files, and the software "
+    "produces a Word report with similarity percentages, sources and matching passages.")
+h1, h2 = st.columns(2)
+with h1:
+    with st.container(border=True):
+        st.subheader("Module 1: Plagiarism check")
+        st.markdown(
+            "**For:** one paper, such as a journal article, thesis chapter or manuscript.\n\n"
+            "**What it does**\n"
+            "1. Reads the text of the uploaded .docx or .pdf and leaves out the reference list.\n"
+            "2. Searches the sentences of the paper (every sentence in Thorough mode) on the open web and in "
+            "open-access scholarly databases (Europe PMC and OpenAlex).\n"
+            "3. Opens the pages found, including open-access journal articles and PDF files, and compares each one "
+            "with the whole paper word by word.\n"
+            "4. Reports the similarity percentage, the sources with matching text, the matched passages and any "
+            "repetition inside the paper.\n\n"
+            "**Output:** a Word report.")
+with h2:
+    with st.container(border=True):
+        st.subheader("Module 2: Assignment similarity")
+        st.markdown(
+            "**For:** a class set of assignments submitted as .docx or .pdf.\n\n"
+            "**What it does**\n"
+            "1. Reads each file and takes the student's name from the file name. You can correct the names before "
+            "the check.\n"
+            "2. Compares every submission with every other one to find students who copied from each other, "
+            "even when one file is Word and the other is PDF.\n"
+            "3. Also checks each submission on the web and in open-access databases, so students who copied from "
+            "online sources are flagged.\n"
+            "4. Ignores the question paper wording if you upload it.\n\n"
+            "**Output:** a Word report with students ranked by similarity, showing the closest classmate, the web "
+            "match and a flag, plus a CSV of the ranking.")
+st.caption("Sources reached: public web pages, open-access journals and repositories, and PDFs found in search results. "
+           "Paywalled journals and private student repositories cannot be searched, so a low result does not prove a "
+           "text is original.")
 
 # ---------------- sidebar: settings shared by both modules ----------------
 with st.sidebar:
@@ -63,9 +100,11 @@ with tab1:
                      help="Thorough searches every sentence. Sentences already found in a matched source are skipped, "
                           "so copied papers finish sooner. A long paper can take 5 to 10 minutes.")
     max_q = {"T": None, "S": 30, "Q": 12}[depth[0]]
-    pages_cap = {"T": 50, "S": 30, "Q": 20}[depth[0]]
+    pages_cap = {"T": 150, "S": 50, "Q": 25}[depth[0]]
     excl = c2.text_input("Ignore web addresses containing (comma separated)",
                          help="For example the journal page where this paper is already published.")
+    use_sch1 = st.checkbox("Also search open-access scholarly databases (Europe PMC, OpenAlex)", True, key="sch1",
+                           help="Finds open-access journal articles and reads their PDFs. PDFs found in web results are always read.")
     if st.button("Run plagiarism check", type="primary", disabled=up is None):
         files, problems = read_files([up])
         for p in problems:
@@ -73,7 +112,7 @@ with tab1:
         if files:
             doc = make_doc(files[0][0], files[0][1], n)
             bar = st.progress(0.0, text="Starting")
-            web = check_web(doc, n=n, min_run=min_run, max_queries=max_q, max_pages=pages_cap,
+            web = check_web(doc, n=n, min_run=min_run, max_queries=max_q, max_pages=pages_cap, search_fn=make_search(use_sch1),
                             exclude_substrings=[x.strip() for x in excl.split(",") if x.strip()],
                             progress=lambda f, m: bar.progress(min(f, 1.0), text=m))
             bar.empty()
@@ -106,6 +145,7 @@ with tab2:
     tmpl = st.file_uploader("Optional: question paper or template to ignore", type=["docx", "pdf"], key="up_tmpl")
     w1, w2 = st.columns(2)
     do_web = w1.checkbox("Also check every submission against the web", True)
+    use_sch2 = st.checkbox("Include open-access scholarly databases (Europe PMC, OpenAlex)", True, key="sch2", disabled=not do_web)
     web_q = w2.slider("Passages searched per submission", 3, 15, 6,
                       help="Each submission takes about 10 to 30 seconds. Fewer passages is faster.", disabled=not do_web)
     if files:
@@ -132,6 +172,7 @@ with tab2:
                 for i, d in enumerate(docs):
                     web_by_name[d.name] = check_web(
                         d, n=n, min_run=min_run, max_queries=web_q, excluded_grams=ex, max_pages=10, delay=0.7,
+                        search_fn=make_search(use_sch2),
                         progress=lambda f, m, i=i, d=d: bar.progress(min((i + f) / len(docs), 1.0), text=f"{d.name}: {m}"))
                 bar.empty()
                 rows = combine_web(rows, web_by_name, high, moderate)
