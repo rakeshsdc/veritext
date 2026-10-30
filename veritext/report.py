@@ -165,6 +165,8 @@ def _coverage_line(web):
     line += f", {web['pages_checked']} pages compared"
     if web.get("stopped_early"):
         line += ". The search stopped early after repeated failures"
+    if web.get("page_cap_reached"):
+        line += ". The limit on pages read was reached, so some later results were not read"
     return line
 
 
@@ -173,6 +175,8 @@ def _confidence(web):
     ratio = (web["queries_run"] + web.get("queries_skipped", 0)) / total
     if web.get("stopped_early"):
         return "Lower: the search stopped before all passages were checked"
+    if web.get("page_cap_reached"):
+        return "Moderate: the limit on pages read was reached"
     if ratio >= 0.95:
         return "High for the text covered: every usable sentence was searched or already matched"
     if ratio >= 0.5:
@@ -199,7 +203,7 @@ def build_single_report(meta, doc, web, rep, settings_note, high=40.0, moderate=
     _h(d, "1. Document details")
     rows = [("Document", doc.name), ("Length analysed", f"{doc.length:,} words"),
             ("Date of check", datetime.now().strftime("%d %B %Y")),
-            ("Method", "Web phrase search, source-page comparison, internal repetition analysis"),
+            ("Method", "Web and open-access database phrase search, source-page and PDF comparison, internal repetition analysis"),
             ("Settings", settings_note)]
     if meta.get("prepared_by"):
         rows.insert(3, ("Checked by", meta["prepared_by"]))
