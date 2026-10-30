@@ -59,7 +59,11 @@ with tab1:
     title1 = st.text_input("Report title", "Independent Similarity Check Report", key="t1")
     up = st.file_uploader("Paper", type=["docx", "pdf"], key="up_single")
     c1, c2 = st.columns(2)
-    max_q = c1.slider("Passages to search", 5, 30, 12, help="More passages = better coverage but slower.")
+    depth = c1.radio("Search depth", ["Thorough: every sentence", "Standard: 30 sentences", "Quick: 12 sentences"],
+                     help="Thorough searches every sentence. Sentences already found in a matched source are skipped, "
+                          "so copied papers finish sooner. A long paper can take 5 to 10 minutes.")
+    max_q = {"T": None, "S": 30, "Q": 12}[depth[0]]
+    pages_cap = {"T": 50, "S": 30, "Q": 20}[depth[0]]
     excl = c2.text_input("Ignore web addresses containing (comma separated)",
                          help="For example the journal page where this paper is already published.")
     if st.button("Run plagiarism check", type="primary", disabled=up is None):
@@ -69,7 +73,7 @@ with tab1:
         if files:
             doc = make_doc(files[0][0], files[0][1], n)
             bar = st.progress(0.0, text="Starting")
-            web = check_web(doc, n=n, min_run=min_run, max_queries=max_q,
+            web = check_web(doc, n=n, min_run=min_run, max_queries=max_q, max_pages=pages_cap,
                             exclude_substrings=[x.strip() for x in excl.split(",") if x.strip()],
                             progress=lambda f, m: bar.progress(min(f, 1.0), text=m))
             bar.empty()
