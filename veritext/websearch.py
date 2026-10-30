@@ -1,6 +1,7 @@
 """Free web check: search distinctive sentences, fetch result pages, compare locally."""
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from .similarity import coverage, span_text, make_doc
@@ -60,18 +61,95 @@ def ddg_search(query, max_results=5):
     return []
 
 
-def fetch_text(url, timeout=8, max_bytes=1_500_000):
+def fetch_text(url, timeout=10, max_bytes=1_500_000, max_pdf_bytes=8_000_000, max_pdf_pages=80):
+    """Read a web page, an XML article or a PDF and return plain text ('' if unreadable)."""
     import requests
     from bs4 import BeautifulSoup
     r = requests.get(url, headers=UA, timeout=timeout, stream=True)
-    ctype = r.headers.get("content-type", "")
-    if "html" not in ctype and "text" not in ctype:
+    ctype = r.headers.get("content-type", "").lower()
+    if "pdf" in ctype or urlparse(url).path.lower().endswith(".pdf"):
+        try:
+            if int(r.headers.get("content-length", 0)) > max_pdf_bytes:
+                return ""
+        except ValueError:
+            pass
+        from .extract import _pdf_text
+        raw = r.raw.read(max_pdf_bytes, decode_content=True)
+        return _pdf_text(raw, max_pages=max_pdf_pages)
+    if not any(x in ctype for x in ("html", "text", "xml")):
         return ""
     raw = r.raw.read(max_bytes, decode_content=True)
     soup = BeautifulSoup(raw, "html.parser")
     for t in soup(["script", "style", "nav", "footer", "header", "noscript"]):
         t.decompose()
     return soup.get_text(" ")
+
+
+# ---------------- open scholarly databases (free, no key) ----------------
+def europepmc_search(phrase, max_results=3, timeout=10):
+    """Exact-phrase search of open-access full texts in Europe PMC."""
+    import requests
+    r = requests.get("https://www.ebi.ac.uk/europepmc/webservices/rest/search", timeout=timeout, headers=UA,
+                     params={"query": f'"{phrase}" AND OPEN_ACCESS:y', "format": "json",
+                             "resultType": "lite", "pageSize": max_results})
+    out = []
+    for x in (r.json().get("resultList", {}) or {}).get("result", []) or []:
+        pmc = x.get("pmcid")
+        if pmc:
+            out.append({"href": f"https://europepmc.org/article/PMC/{pmc}", "title": x.get("title", pmc),
+                        "fetch": f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmc}/fullTextXML"})
+    return out
+
+
+def openalex_search(phrase, max_results=3, timeout=10):
+    """Exact-phrase search in OpenAlex; returns the open-access copy (PDF or landing page) of each hit."""
+    import os
+    import requests
+    params = {"search": f'"{phrase}"', "per-page": max_results, "filter": "open_access.is_oa:true",
+              "select": "id,title,doi,open_access,best_oa_location"}
+    if os.environ.get("VERITEXT_EMAIL"):
+        params["mailto"] = os.environ["VERITEXT_EMAIL"]
+    r = requests.get("https://api.openalex.org/works", params=params, timeout=timeout, headers=UA)
+    out = []
+    for w in r.json().get("results", []) or []:
+        loc = w.get("best_oa_location") or {}
+        href = loc.get("pdf_url") or loc.get("landing_page_url") or (w.get("open_access") or {}).get("oa_url")
+        if href:
+            out.append({"href": href, "title": w.get("title") or href})
+    return out
+
+
+def make_search(scholarly=True):
+    """Return a search function: web search, plus open-access databases when scholarly=True.
+    A failure in one source never stops the others."""
+    def search(phrase):
+        jobs = [ddg_search] + ([europepmc_search, openalex_search] if scholarly else [])
+
+        def run(fn, quiet):
+            try:
+                return fn(phrase)
+            except Exception as e:
+                if quiet:
+                    return []
+                raise e
+        with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+            futs = [ex.submit(run, fn, fn is not ddg_search) for fn in jobs]
+            results, first_err = [], None
+            for f in futs:
+                try:
+                    results.extend(f.result())
+                except Exception as e:
+                    first_err = e
+        if not results and first_err is not None:
+            raise first_err
+        seen, merged = set(), []
+        for res in results:
+            u = res.get("href")
+            if u and u not in seen:
+                seen.add(u)
+                merged.append(res)
+        return merged
+    return search
 
 
 def _domain(u):
@@ -86,10 +164,10 @@ def check_web(doc, n=6, min_run=8, max_queries=12, max_pages=20, exclude_substri
     matched run is not searched again. Returns dict(total_pct, sources, per_query, ...)."""
     queries = pick_queries(doc, k=max_queries, skip_grams=excluded_grams, n=n)
     union = bytearray(doc.length)
-    page_info, pct_by_url, titles = {}, {}, {}
+    page_info, pct_by_url, titles, fetch_map = {}, {}, {}, {}
     errors, per_query = [], []
     run = skipped = pages = fails_in_row = 0
-    stopped_early = False
+    stopped_early = cap_reached = False
     for qi, q in enumerate(queries):
         if progress:
             progress(qi / max(1, len(queries)), f"Passage {qi + 1} of {len(queries)}  |  {pages} pages compared")
@@ -106,6 +184,8 @@ def check_web(doc, n=6, min_run=8, max_queries=12, max_pages=20, exclude_substri
                     continue
                 found.append(u)
                 titles.setdefault(u, res.get("title", u))
+                if res.get("fetch"):
+                    fetch_map[u] = res["fetch"]
             fails_in_row = 0
         except Exception as e:                 # rate limit / network
             if "no results" not in str(e).lower():
@@ -118,11 +198,14 @@ def check_web(doc, n=6, min_run=8, max_queries=12, max_pages=20, exclude_substri
                     break
         run += 1
         for u in found:
-            if u in page_info or pages >= max_pages:
+            if u in page_info:
+                continue
+            if pages >= max_pages:
+                cap_reached = True
                 continue
             pages += 1
             try:
-                page_text = fetch_fn(u)
+                page_text = fetch_fn(fetch_map.get(u, u))
             except Exception as e:
                 errors.append(f"Could not read {u[:60]}: {str(e)[:60]}")
                 page_info[u] = None
@@ -151,4 +234,4 @@ def check_web(doc, n=6, min_run=8, max_queries=12, max_pages=20, exclude_substri
     total = 100.0 * sum(union) / doc.length if doc.length else 0.0
     return {"total_pct": total, "sources": sources, "per_query": per_query, "queries_total": len(queries),
             "queries_run": run, "queries_skipped": skipped, "pages_checked": pages,
-            "stopped_early": stopped_early, "errors": errors}
+            "stopped_early": stopped_early, "page_cap_reached": cap_reached, "errors": errors}
