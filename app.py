@@ -14,7 +14,7 @@ DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 st.set_page_config(page_title=APP_NAME, page_icon="📄", layout="wide")
 st.title(f"📄 {APP_NAME}")
 st.caption(APP_TAGLINE)
-
+st.markdown("Developed by **Dr. Rakesh Chandran S.B**, Associate Professor of Physics & IQAC Coordinator, Sanatana Dharma College, Alappuzha")
 st.markdown(
     f"**{APP_NAME}** checks documents for copied text. Upload Word (.docx) or PDF files, and the software "
     "produces a Word report with similarity percentages, sources and matching passages.")
