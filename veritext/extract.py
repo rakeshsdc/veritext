@@ -16,10 +16,11 @@ def _docx_text(data: bytes) -> str:
     return "\n".join(parts)
 
 
-def _pdf_text(data: bytes) -> str:
+def _pdf_text(data: bytes, max_pages=None) -> str:
     from pypdf import PdfReader
-    r = PdfReader(io.BytesIO(data))
-    return "\n".join((pg.extract_text() or "") for pg in r.pages)
+    r = PdfReader(io.BytesIO(data), strict=False)
+    pages = r.pages if max_pages is None else r.pages[:max_pages]
+    return "\n".join((pg.extract_text() or "") for pg in pages)
 
 
 def extract_text(filename: str, data: bytes) -> str:
