@@ -158,6 +158,28 @@ def _lvl_reading(lvl, n_sources):
             "High": "Substantial overlap with online sources. Review the sources listed below."}[lvl]
 
 
+def _coverage_line(web):
+    line = f"{web['queries_run']} passages searched"
+    if web.get("queries_skipped"):
+        line += f", {web['queries_skipped']} more already matched in sources found earlier"
+    line += f", {web['pages_checked']} pages compared"
+    if web.get("stopped_early"):
+        line += ". The search stopped early after repeated failures"
+    return line
+
+
+def _confidence(web):
+    total = max(1, web.get("queries_total", web["queries_run"]))
+    ratio = (web["queries_run"] + web.get("queries_skipped", 0)) / total
+    if web.get("stopped_early"):
+        return "Lower: the search stopped before all passages were checked"
+    if ratio >= 0.95:
+        return "High for the text covered: every usable sentence was searched or already matched"
+    if ratio >= 0.5:
+        return "Moderate: most sentences were searched"
+    return "Moderate for the passages checked, lower for the full text"
+
+
 def _assess(pct):
     if pct >= 15:
         return "Substantial overlap. Review"
@@ -190,25 +212,35 @@ def build_single_report(meta, doc, web, rep, settings_note, high=40.0, moderate=
          f"{len(srcs)} source(s) with matching text; longest matching run {longest} words" if srcs
          else f"None found in the passages checked (0 matches above {meta.get('min_run', 8)} words)"),
         ("Indicative similarity", f"{pct:.1f}% from confirmed matches" if srcs else "Below 1% from confirmed matches"),
-        ("Search coverage", f"{web['queries_run']} distinctive passages searched, {web['pages_checked']} pages compared"),
+        ("Search coverage", _coverage_line(web)),
         ("Internal repetition", f"{rep['count']} repeated {meta.get('n', 6)}-word phrases ({rep['pct']:.1f}% of the text)"),
         ("Overall reading", _lvl_reading(lvl, len(srcs)))])
     _para(d, "Reading of the result: shared dates, names and events appear in any text on the same subject, "
              "so each match should be judged by a person.")
 
     _h(d, "3. Passages searched")
+    pq = web["per_query"]
     prow = []
-    for i, q in enumerate(web["per_query"]):
-        if q["n_results"] == 0:
+    for i, q in enumerate(pq):
+        if q["n_results"] == -1:
+            res = "Already matched in a source found earlier"
+        elif q["n_results"] == 0:
             res = "No page returned"
         elif q["best_pct"] <= 0:
             res = "No match; other pages only"
         else:
             res = f"Match {q['best_pct']:.1f}% in {q['best_domain']}"
         phrase = q["phrase"] if len(q["phrase"]) < 70 else q["phrase"][:67] + "..."
-        prow.append((i + 1, f"{q['pos']}%", phrase, res))
-    if prow:
-        _table(d, ["#", "Position", "Passage tested", "Result"], prow, [0.8, 1.9, 7.7, 6.6])
+        prow.append((i + 1, f"{q['pos']}%", phrase, res, q["best_pct"] > 0 or q["n_results"] == -1))
+    if len(prow) > 40:
+        hits = [x for x in prow if x[4]]
+        shown = hits[:40]
+        _para(d, f"{len(prow)} passages were covered: {len(hits)} matched a source (the first {len(shown)} are listed) "
+                 f"and {len(prow) - len(hits)} returned no match.")
+    else:
+        shown = prow
+    if shown:
+        _table(d, ["#", "Position", "Passage tested", "Result"], [x[:4] for x in shown], [0.8, 1.9, 7.7, 6.6])
     else:
         _para(d, "No passage was long enough to search.")
 
@@ -238,10 +270,10 @@ def build_single_report(meta, doc, web, rep, settings_note, high=40.0, moderate=
         _para(d, "No repeated passages were found inside the document.")
 
     _h(d, "7. Final summary: similarity percentage" if srcs else "6. Final summary: similarity percentage")
-    cov = "Moderate for the passages checked" if web["queries_run"] >= 8 else "Lower, as few passages were searched"
+    cov = _confidence(web)
     _kv_table(d, [("Estimated similarity", f"{pct:.1f}%" if srcs else "Less than 1% (0% confirmed matched text)"),
                   ("Level", lvl),
-                  ("Basis", f"{web['queries_run']} passages searched; {web['pages_checked']} pages compared in detail"),
+                  ("Basis", _coverage_line(web)),
                   ("Internal self-overlap", f"{rep['pct']:.1f}%"),
                   ("Confidence", cov),
                   ("Note", "Independent estimate using free web tools")])
